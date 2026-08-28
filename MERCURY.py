@@ -468,7 +468,20 @@ class MERCURY:
         start_aliases = ["mention_start", "start", "start_idx", "start_pos"]
         end_aliases = ["mention_end", "end", "end_idx", "end_pos"]
         type_aliases = ["entity_type", "type", "spacy_type"]
-        file_aliases = ["source_file", "document source", "source_article", "filename"]
+        doc_aliases = [
+            "document_id",
+            "source_document",
+            "doc_id",
+            "source_file",
+            "document source",
+            "source_article",
+            "filename",
+            "doc",
+            "document",
+            "document_name",
+            "file_name",
+            "source_doc",
+        ]
 
         raw_cols_lower = {col.strip().lower(): col for col in df_raw.columns}
 
@@ -480,7 +493,7 @@ class MERCURY:
 
         if column_mapping:
             for raw_col, std_target in column_mapping.items():
-                if raw_col in df_raw.columns:
+                if raw_col in df_raw.columns and std_target and std_target != "None":
                     mapped_dict[raw_col] = std_target
         else:
             col_sentence = find_col(sentence_aliases)
@@ -488,7 +501,7 @@ class MERCURY:
             col_start = find_col(start_aliases)
             col_end = find_col(end_aliases)
             col_type = find_col(type_aliases)
-            col_file = find_col(file_aliases)
+            col_doc = find_col(doc_aliases)
 
             if col_sentence:
                 mapped_dict[col_sentence] = "clean_mention_sentence"
@@ -500,8 +513,8 @@ class MERCURY:
                 mapped_dict[col_end] = "mention_end"
             if col_type:
                 mapped_dict[col_type] = "entity_type"
-            if col_file:
-                mapped_dict[col_file] = "source_file"
+            if col_doc:
+                mapped_dict[col_doc] = "document_id"
 
         df_mapped = df_raw.rename(columns=mapped_dict)
 
@@ -1173,7 +1186,7 @@ class MERCURY:
 
         results = self.df.iloc[top_indices].copy()
         results["similarity_score"] = top_scores
-        cols = ["similarity_score", "clean_mention_sentence", "clean_entity_mention", "source_language", "cluster_canonical_mention"]
+        cols = ["similarity_score", "document_id", "source_document", "clean_mention_sentence", "clean_entity_mention", "source_language", "cluster_canonical_mention"]
         display_cols = [c for c in cols if c in results.columns]
         return results[display_cols]
 
@@ -1316,12 +1329,16 @@ class MERCURY:
         search_button = widgets.Button(description="Search", button_style="primary")
 
         extra_columns = [col for col in self.df.columns if col not in ("clean_mention_sentence", "similarity_score")] if self.df is not None else []
+        default_selected = [
+            col for col in ("document_id", "source_document", "clean_entity_mention", "source_language", "cluster_id", "cluster_canonical_mention")
+            if col in extra_columns
+        ]
         column_selector = widgets.SelectMultiple(
             options=extra_columns,
-            value=[col for col in ("clean_entity_mention", "source_language", "cluster_id", "cluster_canonical_mention") if col in extra_columns],
+            value=default_selected,
             description="Extra columns:",
             disabled=False,
-            rows=min(5, max(1, len(extra_columns))),
+            rows=min(6, max(1, len(extra_columns))),
         )
 
         tab1_output = widgets.Output()
@@ -1383,7 +1400,17 @@ class MERCURY:
             state["term"] = search_term
 
             selected_cols = list(column_selector.value)
-            display_cols = ["similarity_score", "clean_mention_sentence"] + [c for c in selected_cols if c not in ("similarity_score", "clean_mention_sentence")]
+            lead_cols = ["similarity_score"]
+            if "document_id" in selected_cols:
+                lead_cols.append("document_id")
+            elif "source_document" in selected_cols:
+                lead_cols.append("source_document")
+            elif "source_file" in selected_cols:
+                lead_cols.append("source_file")
+
+            display_cols = lead_cols + ["clean_mention_sentence"] + [
+                c for c in selected_cols if c not in lead_cols and c != "clean_mention_sentence"
+            ]
 
             with tab1_output:
                 tab1_output.clear_output()
@@ -1504,7 +1531,10 @@ class MERCURY:
             medoid = row.get("cluster_canonical_mention", entity or "N/A")
             lang = row.get("source_language", "")
             cluster = row.get("cluster_id", "N/A")
-            print(f"[{score:.4f}] (Lang: {lang} | Cluster: {cluster} | Medoid: '{medoid}')")
+            doc_id = row.get("document_id", row.get("source_document", row.get("source_file", None)))
+            doc_str = f" | Doc: {doc_id}" if pd.notna(doc_id) and str(doc_id).strip() not in ("", "None", "nan") else ""
+            lang_str = f"Lang: {lang} | " if pd.notna(lang) and str(lang).strip() not in ("", "None", "nan") else ""
+            print(f"[{score:.4f}] ({lang_str}Cluster: {cluster} | Medoid: '{medoid}'{doc_str})")
             print(f"       Entity Mention: {entity}")
             print(f"       Sentence: {sentence}\n")
 
@@ -1573,25 +1603,36 @@ class MERCURY:
                 _, auto_mapped = self.map_dataset(path, delimiter=delimiter, verbose=False)
                 inv_auto = {v: k for k, v in auto_mapped.items()}
 
+                sentence_val = inv_auto.get("clean_mention_sentence", "None")
+                entity_val = inv_auto.get("clean_entity_mention", "None")
+                start_val = inv_auto.get("mention_start", "None")
+                end_val = inv_auto.get("mention_end", "None")
+                doc_val = inv_auto.get("document_id", inv_auto.get("source_document", inv_auto.get("source_file", "None")))
+
                 sentence_col_dd = widgets.Dropdown(
                     options=raw_cols_with_none,
-                    value=inv_auto.get("clean_mention_sentence", "None"),
+                    value=sentence_val if sentence_val in raw_cols_with_none else "None",
                     description="Sentence col:",
                 )
                 entity_col_dd = widgets.Dropdown(
                     options=raw_cols_with_none,
-                    value=inv_auto.get("clean_entity_mention", "None"),
+                    value=entity_val if entity_val in raw_cols_with_none else "None",
                     description="Entity col:",
                 )
                 start_col_dd = widgets.Dropdown(
                     options=raw_cols_with_none,
-                    value=inv_auto.get("mention_start", "None"),
+                    value=start_val if start_val in raw_cols_with_none else "None",
                     description="Start col:",
                 )
                 end_col_dd = widgets.Dropdown(
                     options=raw_cols_with_none,
-                    value=inv_auto.get("mention_end", "None"),
+                    value=end_val if end_val in raw_cols_with_none else "None",
                     description="End col:",
+                )
+                doc_col_dd = widgets.Dropdown(
+                    options=raw_cols_with_none,
+                    value=doc_val if doc_val in raw_cols_with_none else "None",
+                    description="Document ID:",
                 )
 
                 apply_button = widgets.Button(description="Apply & save mapping", button_style="success")
@@ -1613,6 +1654,8 @@ class MERCURY:
                                 user_mapping[start_col_dd.value] = "mention_start"
                             if end_col_dd.value != "None":
                                 user_mapping[end_col_dd.value] = "mention_end"
+                            if doc_col_dd.value != "None":
+                                user_mapping[doc_col_dd.value] = "document_id"
 
                             print(f"[INFO] Applying mapping on '{path}'...")
                             df_mapped, final_map = self.map_dataset(path, column_mapping=user_mapping, delimiter=delimiter, verbose=True)
@@ -1630,9 +1673,10 @@ class MERCURY:
                 apply_button.on_click(on_apply_click)
 
                 form_box = widgets.VBox([
-                    widgets.HTML("<p><b>Correct auto-detected column mappings if needed:</b></p>"),
+                    widgets.HTML("<p><b>Correct auto-detected column mappings if needed (set Document ID to 'None' to ignore):</b></p>"),
                     widgets.HBox([sentence_col_dd, entity_col_dd]),
                     widgets.HBox([start_col_dd, end_col_dd]),
+                    widgets.HBox([doc_col_dd]),
                     apply_button,
                 ])
                 mapping_container.children = [form_box]
